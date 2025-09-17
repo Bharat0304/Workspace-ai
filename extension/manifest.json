@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Workspace AI Focus Guard",
+  "version": "0.1.0",
+  "description": "Blocks distracting sites during study sessions and allows only educational content.",
+  "permissions": [
+    "tabs",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://localhost:3000/*",
+        "http://localhost:3001/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "options_page": "options.html",
+  "action": {
+    "default_title": "Workspace AI Focus Guard",
+    "default_popup": "popup.html"
+  }
+}

@@ -12,6 +12,7 @@ import authRoutes from './routes/auth';
 import sessionRoutes from './routes/session';
 import monitoringRoutes from './routes/monitoring';
 import interventionRoutes from './routes/intervention';
+import enforcementRoutes from './routes/enforcement';
 
 // Import services
 import ScreenMonitoringService from './services/screenMonitoring';
@@ -71,6 +72,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/session', sessionRoutes);
 app.use('/api/monitoring', monitoringRoutes);
 app.use('/api/intervention', interventionRoutes);
+app.use('/api/enforcement', enforcementRoutes);
 
 // Health check endpoint
 app.get('/health', (_req: Request, res: Response) => {

@@ -1,0 +1,106 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Workspace AI Focus Guard - Options</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 20px; }
+      textarea { width: 100%; height: 120px; }
+      label { display:block; margin: 12px 0 6px; font-weight:600 }
+      .row { margin-bottom: 16px; }
+      button { padding: 8px 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>Focus Guard Settings</h1>
+    <div class="row">
+      <label><input type="checkbox" id="enabled" /> Enable enforcement</label>
+    </div>
+    <div class="row">
+      <label for="allow">Allowlist (one domain per line)</label>
+      <textarea id="allow"></textarea>
+    </div>
+    <div class="row">
+      <label for="block">Blocklist (one domain per line)</label>
+      <textarea id="block"></textarea>
+    </div>
+    <div class="row">
+      <label for="backend">Backend Rules URL (optional)</label>
+      <input id="backend" style="width:100%" placeholder="http://localhost:5001/api/enforcement/rules" />
+    </div>
+    <div class="row">
+      <label for="action">Action on disallowed pages</label>
+      <select id="action">
+        <option value="close">Close tab</option>
+        <option value="redirect">Redirect</option>
+      </select>
+    </div>
+    <div class="row" id="redirectRow" style="display:none">
+      <label for="redirectUrl">Redirect URL (used if action = Redirect)</label>
+      <input id="redirectUrl" style="width:100%" placeholder="https://www.youtube.com/results?search_query=study+lecture" />
+    </div>
+    <div class="row">
+      <label for="requiredKeyword">Required keyword (optional)</label>
+      <input id="requiredKeyword" style="width:100%" placeholder="e.g. jee, neet, dsa, lecture" />
+      <div class="status" style="font-size:12px;color:#555;margin-top:6px;">
+        If set, only pages whose URL or title contain this word will be allowed.
+      </div>
+    </div>
+    <div class="row">
+      <label for="disallowedKeywords">Disallowed keywords (YouTube) – one per line</label>
+      <textarea id="disallowedKeywords" placeholder="e.g. comedy\nfunny\nprank"></textarea>
+      <div class="status" style="font-size:12px;color:#555;margin-top:6px;">
+        If any of these words appear in the YouTube URL, title, or search query, the page will be blocked.
+      </div>
+    </div>
+    <div class="row">
+      <button id="save">Save</button>
+    </div>
+    <script type="module">
+      const enabledEl = document.getElementById('enabled');
+      const allowEl = document.getElementById('allow');
+      const blockEl = document.getElementById('block');
+      const backendEl = document.getElementById('backend');
+      const saveBtn = document.getElementById('save');
+      const actionEl = document.getElementById('action');
+      const redirectRow = document.getElementById('redirectRow');
+      const redirectUrlEl = document.getElementById('redirectUrl');
+      const requiredKeywordEl = document.getElementById('requiredKeyword');
+      const disallowedKeywordsEl = document.getElementById('disallowedKeywords');
+
+      async function load() {
+        const { allow = [], block = [], enabled = true, backendRulesUrl = '', actionMode = 'close', redirectUrl = '', requiredKeyword = '', disallowedKeywords = [] } = await chrome.storage.sync.get(['allow','block','enabled','backendRulesUrl','actionMode','redirectUrl','requiredKeyword','disallowedKeywords']);
+        enabledEl.checked = enabled;
+        allowEl.value = allow.join('\n');
+        blockEl.value = block.join('\n');
+        backendEl.value = backendRulesUrl || '';
+        actionEl.value = actionMode;
+        redirectUrlEl.value = redirectUrl || '';
+        redirectRow.style.display = actionMode === 'redirect' ? 'block' : 'none';
+        requiredKeywordEl.value = requiredKeyword || '';
+        disallowedKeywordsEl.value = Array.isArray(disallowedKeywords) ? disallowedKeywords.join('\n') : '';
+      }
+
+      async function save() {
+        const allow = allowEl.value.split('\n').map(s => s.trim()).filter(Boolean);
+        const block = blockEl.value.split('\n').map(s => s.trim()).filter(Boolean);
+        const enabled = enabledEl.checked;
+        const backendRulesUrl = backendEl.value.trim() || null;
+        const actionMode = actionEl.value;
+        const redirectUrl = redirectUrlEl.value.trim();
+        const requiredKeyword = requiredKeywordEl.value.trim();
+        const disallowedKeywords = disallowedKeywordsEl.value.split('\n').map(s => s.trim()).filter(Boolean);
+        await chrome.storage.sync.set({ allow, block, enabled, backendRulesUrl, actionMode, redirectUrl, requiredKeyword, disallowedKeywords });
+        await chrome.runtime.sendMessage({ type: 'update-rules', allow, block, enabled, actionMode, redirectUrl, requiredKeyword, disallowedKeywords });
+        alert('Saved');
+      }
+
+      actionEl.addEventListener('change', () => {
+        redirectRow.style.display = actionEl.value === 'redirect' ? 'block' : 'none';
+      });
+
+      saveBtn.addEventListener('click', save);
+      load();
+    </script>
+  </body>
+</html>
