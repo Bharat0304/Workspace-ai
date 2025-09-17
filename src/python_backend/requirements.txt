@@ -1,0 +1,10 @@
+fastapi==0.110.0
+uvicorn[standard]==0.27.1
+pydantic>=2.6.0
+opencv-python==4.10.0.84
+pytesseract==0.3.13
+numpy==1.26.4
+pandas==2.2.2
+joblib==1.4.2
+# Optional if Python needs to capture screenshots itself (not required for current Node->Python flow)
+# pyautogui==0.9.54

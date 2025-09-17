@@ -1,0 +1,135 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Camera Focus Test</title>
+    <style>
+      body { font-family: ui-sans-serif, system-ui, -apple-system; margin: 16px; }
+      video, canvas { max-width: 480px; width: 100%; border: 1px solid #ccc; border-radius: 8px; }
+      #controls { margin: 12px 0; display: flex; gap: 8px; align-items: center; }
+      #log { white-space: pre-wrap; background: #111; color: #0f0; padding: 12px; border-radius: 8px; min-height: 120px; }
+      label { display: inline-block; min-width: 120px; }
+      input[type="text"] { padding: 6px 8px; }
+      button { padding: 8px 12px; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <h2>Camera Focus Test</h2>
+
+    <div id="controls">
+      <label>User ID</label>
+      <input id="userId" type="text" value="u123" />
+      <label>Session ID</label>
+      <input id="sessionId" type="text" value="test-session-1" />
+      <button id="startBtn">Start Camera</button>
+      <button id="stopBtn" disabled>Stop Camera</button>
+    </div>
+
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas" style="display:none;"></canvas>
+
+    <h3>Logs</h3>
+    <pre id="log"></pre>
+
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script>
+      const log = (m) => {
+        const el = document.getElementById('log');
+        el.textContent += (typeof m === 'string' ? m : JSON.stringify(m)) + '\n';
+        el.scrollTop = el.scrollHeight;
+      };
+
+      const nodePort = 5001; // change if your backend runs on a different port
+      const socket = io(`http://localhost:${nodePort}`, { transports: ["websocket"] });
+
+      socket.on('connect', () => {
+        log(['socket connected', socket.id]);
+      });
+
+      socket.on('focus-analysis', (data) => {
+        log(['focus-analysis', data]);
+      });
+
+      socket.on('low-focus-alert', (data) => {
+        log(['low-focus-alert', data]);
+      });
+
+      socket.on('camera-error', (data) => {
+        log(['camera-error', data]);
+      });
+
+      socket.on('connect_error', (e) => log(['connect_error', e.message]));
+
+      const video = document.getElementById('video');
+      const canvas = document.getElementById('canvas');
+      const startBtn = document.getElementById('startBtn');
+      const stopBtn = document.getElementById('stopBtn');
+      const userInput = document.getElementById('userId');
+      const sessionInput = document.getElementById('sessionId');
+
+      let stream = null;
+      let timer = null;
+
+      async function startCamera() {
+        try {
+          const userId = userInput.value.trim();
+          socket.emit('join-session', userId);
+          log(['joined room', `user-${userId}`]);
+
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          video.srcObject = stream;
+
+          // set canvas size after metadata is loaded
+          await new Promise(res => video.onloadedmetadata = res);
+          canvas.width = video.videoWidth || 640;
+          canvas.height = video.videoHeight || 480;
+
+          // send frames every 1000ms
+          timer = setInterval(captureAndSend, 1000);
+          startBtn.disabled = true;
+          stopBtn.disabled = false;
+          log('camera started');
+        } catch (err) {
+          log(['start error', err.message]);
+        }
+      }
+
+      function stopCamera() {
+        if (timer) clearInterval(timer);
+        timer = null;
+        if (stream) {
+          stream.getTracks().forEach(t => t.stop());
+          stream = null;
+        }
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        log('camera stopped');
+      }
+
+      function captureAndSend() {
+        try {
+          const userId = userInput.value.trim();
+          const sessionId = sessionInput.value.trim();
+
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.6); // base64 jpeg
+          const base64 = dataUrl.split(',')[1];
+
+          socket.emit('camera-frame', {
+            userId,
+            sessionId,
+            frameData: base64,
+          });
+          log(['frame sent', { size: base64.length }]);
+        } catch (e) {
+          log(['capture error', e.message]);
+        }
+      }
+
+      startBtn.addEventListener('click', startCamera);
+      stopBtn.addEventListener('click', stopCamera);
+      window.addEventListener('beforeunload', stopCamera);
+    </script>
+  </body>
+</html>

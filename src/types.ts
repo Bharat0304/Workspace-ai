@@ -76,6 +76,16 @@ export interface TabData {
   // SOCKET.IO EVENT TYPES
   // ============================================
   
+  export interface SocketEvents {
+    'join-session': (userId: string) => void;
+    'screen-data': (data: any) => void;
+    'camera-frame': (data: any) => void;
+    'screen-analysis': (data: any) => void;
+    'focus-analysis': (data: any) => void;
+    'distraction-detected': (data: any) => void;
+    'python-analysis-result': (data: any) => void;
+  }
+
   export interface ServerToClientEvents {
     'tab-update': (data: TabData) => void;
     'error': (error: string) => void;
@@ -226,4 +236,7 @@ export interface TabData {
     CLOUDINARY_API_KEY: string;
     CLOUDINARY_API_SECRET: string;
   }
+
+  // Re-export all types from types/index.ts
+  export * from './types/index';
   

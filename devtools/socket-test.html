@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+  <body>
+    <h3>Socket.IO monitor</h3>
+    <pre id="log"></pre>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script>
+      const log = (m) => document.getElementById('log').textContent += m + '\n';
+      const socket = io("http://localhost:5001", { transports: ["websocket"] }); // adjust port if needed
+      socket.on("connect", () => {
+        log("connected " + socket.id);
+        socket.emit("join-session", "u123"); // must match the userId you POSTed to /api/monitoring/start
+        log("joined room user-u123");
+      });
+      socket.on("screen-analysis", (data) => log("screen-analysis " + JSON.stringify(data)));
+      socket.on("distraction-detected", (data) => log("distraction-detected " + JSON.stringify(data)));
+      socket.on("connect_error", (e) => log("connect_error " + e.message));
+    </script>
+  </body>
+</html>
