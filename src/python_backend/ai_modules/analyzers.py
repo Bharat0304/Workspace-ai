@@ -22,7 +22,17 @@ try:
 except Exception:  # pragma: no cover
     joblib = None  # type: ignore
 
+# Import the OpenCV Focus Monitor
+try:
+    from .focus_score_monitor import OpenCVFocusMonitor, analyze_focus_from_b64 as opencv_analyze_focus
+    OPENCV_FOCUS_AVAILABLE = True
+    print("✅ OpenCV Focus Monitor available")
+except ImportError as e:
+    OPENCV_FOCUS_AVAILABLE = False
+    print(f"⚠️ OpenCV Focus Monitor not available: {e}")
+
 _MODEL = None
+_FOCUS_MONITOR = None
 
 def _ensure_model(model_path: str | None = None):
     global _MODEL
@@ -39,6 +49,23 @@ def _ensure_model(model_path: str | None = None):
         except Exception:
             _MODEL = None
     return _MODEL
+
+def _ensure_focus_monitor():
+    """Ensure OpenCV Focus Monitor is initialized"""
+    global _FOCUS_MONITOR
+    if _FOCUS_MONITOR is not None:
+        return _FOCUS_MONITOR
+    
+    if OPENCV_FOCUS_AVAILABLE:
+        try:
+            _FOCUS_MONITOR = OpenCVFocusMonitor()
+            print("🎯 OpenCV Focus Monitor initialized successfully")
+            return _FOCUS_MONITOR
+        except Exception as e:
+            print(f"❌ Failed to initialize OpenCV Focus Monitor: {e}")
+            _FOCUS_MONITOR = None
+    
+    return None
 
 def _b64_to_image_np(b64_data: str) -> np.ndarray:
     """Decode base64 image (jpeg/png) to numpy array in RGB."""
@@ -404,24 +431,139 @@ def analyze_screen_from_b64(screenshot_b64: str) -> Dict[str, Any]:
     return result
 
 def analyze_focus_from_b64(frame_b64: str) -> Dict[str, Any]:
-    """Mock focus analysis from a single frame. Extend with real model as needed."""
-    size = len(frame_b64)
-    focus_score = max(0, min(100, (size % 100)))
-    levels = ["low", "medium", "high"]
-    focus_level = levels[(size // 7) % 3]
-    attention_level = levels[(size // 11) % 3]
-    eye_gaze = ["left", "forward", "right"][ (size // 5) % 3 ]
-    face_detected = (size % 2) == 0
+    """
+    Analyze user focus from webcam frame using OpenCV Focus Monitor
     
-    return {
-        "focus_score": focus_score,
-        "focus_level": focus_level,
-        "attention_level": attention_level,
-        "eye_gaze": eye_gaze,
-        "face_detected": face_detected,
-        "analysis_timestamp": __import__("datetime").datetime.utcnow().isoformat() + "Z",
-        "recommendations": ["blink more often", "adjust screen distance"] if focus_level == "low" else [],
-    }
+    Features analyzed:
+    - Eye gaze direction (looking at screen vs away)
+    - Posture analysis (upright shoulders, head position)
+    - Phone usage detection (hand positions, gestures)
+    - Overall focus score calculation
+    """
+    try:
+        print("🎯 Starting focus analysis...")
+        
+        # Check if OpenCV Focus Monitor is available
+        if not OPENCV_FOCUS_AVAILABLE:
+            print("❌ OpenCV Focus Monitor not available")
+            return {
+                "error": "OpenCV Focus Monitor not available. Install opencv-python.",
+                "focus_score": 0,
+                "focus_level": "error",
+                "eye_gaze": "unknown",
+                "looking_at_screen": False,
+                "face_detected": False,
+                "posture_score": 0,
+                "phone_detected": False,
+                "recommendations": ["Install OpenCV dependencies to enable focus monitoring"],
+                "alerts": ["Focus monitoring unavailable"],
+                "analysis_timestamp": __import__("datetime").datetime.utcnow().isoformat() + "Z"
+            }
+        
+        # Initialize focus monitor if needed
+        monitor = _ensure_focus_monitor()
+        if monitor is None:
+            print("❌ Failed to initialize focus monitor")
+            return {
+                "error": "Failed to initialize focus monitor",
+                "focus_score": 0,
+                "focus_level": "error",
+                "recommendations": ["Check camera permissions and OpenCV installation"],
+                "analysis_timestamp": __import__("datetime").datetime.utcnow().isoformat() + "Z"
+            }
+        
+        # Decode base64 frame
+        try:
+            img_bytes = base64.b64decode(frame_b64)
+            img_array = np.frombuffer(img_bytes, np.uint8)
+            frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+            
+            if frame is None:
+                raise ValueError("Failed to decode frame")
+                
+            print(f"✅ Frame decoded successfully: {frame.shape}")
+            
+        except Exception as e:
+            print(f"❌ Frame decoding error: {e}")
+            return {
+                "error": f"Frame decoding failed: {str(e)}",
+                "focus_score": 0,
+                "focus_level": "error",
+                "face_detected": False,
+                "analysis_timestamp": __import__("datetime").datetime.utcnow().isoformat() + "Z"
+            }
+        
+        # Analyze frame with OpenCV Focus Monitor
+        analysis_result = monitor.analyze_frame(frame)
+        
+        print(f"📊 Focus analysis complete:")
+        print(f"   Focus Score: {analysis_result.get('focus_score', 0):.1f}%")
+        print(f"   Face Detected: {analysis_result.get('face_detected', False)}")
+        print(f"   Looking at Screen: {analysis_result.get('looking_at_screen', False)}")
+        print(f"   Phone Detected: {analysis_result.get('phone_detected', False)}")
+        
+        # Format result for API compatibility
+        formatted_result = {
+            # Core focus metrics
+            "focus_score": analysis_result.get("focus_score", 0),
+            "focus_level": analysis_result.get("focus_level", "unknown"),
+            "focus_color": analysis_result.get("focus_color", "gray"),
+            
+            # Eye gaze analysis
+            "eye_gaze": analysis_result.get("eye_gaze", "unknown"),
+            "looking_at_screen": analysis_result.get("looking_at_screen", False),
+            "face_detected": analysis_result.get("face_detected", False),
+            
+            # Posture analysis
+            "posture_score": analysis_result.get("posture_score", 0),
+            "posture_level": analysis_result.get("posture_analysis", {}).get("posture_level", "unknown"),
+            "shoulders_aligned": analysis_result.get("posture_analysis", {}).get("indicators", {}).get("head_body_aligned", False),
+            
+            # Phone detection
+            "phone_detected": analysis_result.get("phone_detected", False),
+            "phone_confidence": analysis_result.get("phone_analysis", {}).get("phone_confidence", 0),
+            "phone_risk_level": analysis_result.get("phone_analysis", {}).get("risk_level", "low"),
+            
+            # Component scores breakdown
+            "component_scores": analysis_result.get("component_scores", {}),
+            
+            # Actionable insights
+            "recommendations": analysis_result.get("recommendations", []),
+            "alerts": analysis_result.get("alerts", []),
+            
+            # Session information
+            "session_duration_minutes": analysis_result.get("session_duration_minutes", 0),
+            "session_average_focus": analysis_result.get("session_average_focus", analysis_result.get("focus_score", 0)),
+            "frame_count": analysis_result.get("frame_count", 0),
+            
+            # Technical metadata
+            "analysis_timestamp": __import__("datetime").datetime.utcnow().isoformat() + "Z",
+            "analysis_quality": analysis_result.get("analysis_quality", "unknown"),
+            
+            # Full detailed analysis (for advanced usage)
+            "detailed_analysis": analysis_result
+        }
+        
+        return formatted_result
+        
+    except Exception as e:
+        print(f"❌ Focus analysis error: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        return {
+            "error": f"Focus analysis failed: {str(e)}",
+            "focus_score": 0,
+            "focus_level": "error",
+            "eye_gaze": "error",
+            "looking_at_screen": False,
+            "face_detected": False,
+            "posture_score": 0,
+            "phone_detected": False,
+            "recommendations": ["Focus analysis error - check camera and lighting"],
+            "alerts": ["Technical error occurred"],
+            "analysis_timestamp": __import__("datetime").datetime.utcnow().isoformat() + "Z"
+        }
 
 def analyze_distraction_from_window(window_info: Dict[str, Any]) -> Dict[str, Any]:
     """Enhanced window-based distraction detection with strict entertainment blocking"""
@@ -585,3 +727,32 @@ def analyze_distraction_from_window(window_info: Dict[str, Any]) -> Dict[str, An
         "recommendation": "Good focus! Keep up the productive work.",
         "educational_indicators": educational_indicators if educational_indicators else []
     }
+
+# Legacy compatibility function (for any existing API calls)
+def analyze_focus_from_b64_legacy(frame_b64: str) -> Dict[str, Any]:
+    """Legacy focus analysis - simplified version for backward compatibility"""
+    try:
+        # Use the main focus analysis function
+        result = analyze_focus_from_b64(frame_b64)
+        
+        # Return simplified format for legacy compatibility
+        return {
+            "focus_score": result.get("focus_score", 0),
+            "focus_level": result.get("focus_level", "unknown"),
+            "attention_level": result.get("focus_level", "unknown"),
+            "eye_gaze": result.get("eye_gaze", "unknown"),
+            "face_detected": result.get("face_detected", False),
+            "analysis_timestamp": result.get("analysis_timestamp"),
+            "recommendations": result.get("recommendations", [])
+        }
+        
+    except Exception as e:
+        return {
+            "focus_score": 0,
+            "focus_level": "error",
+            "attention_level": "low",
+            "eye_gaze": "unknown", 
+            "face_detected": False,
+            "error": str(e),
+            "analysis_timestamp": __import__("datetime").datetime.utcnow().isoformat() + "Z"
+        }
