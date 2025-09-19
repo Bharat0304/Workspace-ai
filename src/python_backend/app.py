@@ -2,6 +2,8 @@ from typing import Optional, Dict, Any
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from fastapi.responses import StreamingResponse
+import io
 import uvicorn
 import os
 import logging
@@ -56,6 +58,20 @@ class ExtensionStatsRequest(BaseModel):
 # ==============================
 app = FastAPI(title="WorkSpace AI Python Backend", version="0.1.0")
 
+# Simple in-memory cache for the latest tab analysis (after imports so types exist)
+LAST_TAB_RESULT: Dict[str, Any] = {
+    "success": False,
+    "analysis_type": "browser_tab",
+    "result": {},
+    "timestamp": None,
+}
+
+# In-memory last educational URL (used by extension to redirect)
+LAST_EDU_URL: str = os.getenv(
+    "DEFAULT_EDU_URL",
+    "https://www.youtube.com/embed/?listType=playlist&list=PL-osiE80TeTs4UjLw5MM6OjgkjFeUxCYH",
+)
+
 # CORS: allow local dev frontend/backend + browser extensions
 frontend_origin = os.getenv("FRONTEND_URL", "http://localhost:3000")
 app.add_middleware(
@@ -84,6 +100,63 @@ def health():
         "python": True,
         "time": __import__("datetime").datetime.utcnow().isoformat() + "Z",
     }
+
+# ==============================
+# Last educational URL endpoints
+# ==============================
+@app.get("/api/last-educational-url")
+def get_last_educational_url():
+    return {"url": LAST_EDU_URL}
+
+class LastEduUrlPayload(BaseModel):
+    url: str
+
+@app.post("/api/last-educational-url")
+def set_last_educational_url(payload: LastEduUrlPayload):
+    global LAST_EDU_URL
+    try:
+        url = payload.url.strip()
+        if not url:
+            return {"success": False, "error": "empty url"}
+        LAST_EDU_URL = url
+        logger.info(f"🎓 Updated LAST_EDU_URL -> {url}")
+        return {"success": True, "url": LAST_EDU_URL}
+    except Exception as e:
+        logger.error(f"❌ set_last_educational_url error: {e}")
+        return {"success": False, "error": str(e)}
+
+# ==============================
+# Utility: Placeholder image endpoint
+# ==============================
+@app.get("/api/placeholder/{w}/{h}")
+def placeholder_image(w: int, h: int):
+    """Return a simple PNG placeholder of size w x h"""
+    try:
+        from PIL import Image, ImageDraw
+        w = max(1, min(2048, int(w)))
+        h = max(1, min(2048, int(h)))
+        img = Image.new("RGB", (w, h), color=(240, 244, 248))
+        draw = ImageDraw.Draw(img)
+        # border
+        draw.rectangle([(0,0),(w-1,h-1)], outline=(200,210,220))
+        # center crosshair
+        draw.line([(0, h//2), (w, h//2)], fill=(210, 220, 230))
+        draw.line([(w//2, 0), (w//2, h)], fill=(210, 220, 230))
+        # size label
+        label = f"{w}×{h}"
+        tw, th = draw.textlength(label), 12
+        draw.text(((w - tw) / 2, (h - th) / 2), label, fill=(120, 130, 140))
+        buf = io.BytesIO()
+        img.save(buf, format='PNG')
+        buf.seek(0)
+        return StreamingResponse(buf, media_type="image/png")
+    except Exception as e:
+        # Fallback: 1x1 PNG
+        import base64
+        pixel = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+        )
+        return StreamingResponse(io.BytesIO(pixel), media_type="image/png")
 
 @app.post("/api/analyze-screen")
 def analyze_screen(payload: ScreenAnalyzeRequest):
@@ -152,7 +225,7 @@ def analyze_tab(payload: TabAnalyzeRequest, background_tasks: BackgroundTasks):
             "process_name": "chrome.exe",  # Assume Chrome
             "active_time": 30  # Default active time for new tabs
         }
-        
+
         # Use existing distraction analyzer
         result = analyze_distraction_from_window(window_info)
         
@@ -164,7 +237,8 @@ def analyze_tab(payload: TabAnalyzeRequest, background_tasks: BackgroundTasks):
         # Determine extension actions based on analysis
         should_warn = is_distraction and distraction_score > 50
         should_block = is_distraction and distraction_score > 70
-        should_close = should_block and severity in ["high", "medium"]
+        # Do NOT request tab closure; we want redirect behavior instead
+        should_close = False
         
         # Get site name from URL
         site_name = "unknown site"
@@ -188,20 +262,34 @@ def analyze_tab(payload: TabAnalyzeRequest, background_tasks: BackgroundTasks):
             "recommended_action": "close_tab" if should_close else "show_overlay" if should_block else "show_banner" if should_warn else "none"
         }
         
+        # If this looks educational (not a distraction) and is a YouTube URL, remember it as last educational
+        try:
+            if not is_distraction and ("youtube." in site_name or "youtu.be" in payload.url.lower()):
+                global LAST_EDU_URL
+                LAST_EDU_URL = payload.url
+                logger.info(f"🎓 Remembered LAST_EDU_URL (from analyze_tab): {LAST_EDU_URL}")
+        except Exception as _e:
+            pass
+
         # Log the decision
         action = "🚨 CLOSE" if should_close else "🔒 BLOCK" if should_block else "⚠️ WARN" if should_warn else "✅ ALLOW"
         logger.info(f"📊 Tab analysis result: {action} ({site_name})")
         
-        # Schedule background action if needed
-        if should_close:
-            background_tasks.add_task(log_tab_closure, site_name, payload.url)
+        # Do not schedule tab closure to avoid closing tabs; redirect is handled by the extension
         
-        return {
+        resp = {
             "success": True,
             "analysis_type": "browser_tab",
             "result": extension_result,
             "timestamp": __import__("datetime").datetime.utcnow().isoformat() + "Z"
         }
+        # cache last tab result
+        try:
+            global LAST_TAB_RESULT
+            LAST_TAB_RESULT = resp
+        except Exception:
+            pass
+        return resp
         
     except Exception as e:
         logger.error(f"❌ Tab analysis error: {str(e)}")
@@ -219,6 +307,15 @@ def analyze_tab(payload: TabAnalyzeRequest, background_tasks: BackgroundTasks):
                 "recommended_action": "none"
             }
         }
+
+@app.get("/api/last-tab")
+def get_last_tab():
+    """Return the last tab analysis cached by /api/analyze-tab"""
+    try:
+        return LAST_TAB_RESULT
+    except Exception as e:
+        logger.error(f"❌ last-tab error: {e}")
+        return {"success": False, "result": {}}
 
 @app.get("/api/extension-status")
 def get_extension_status():
@@ -403,6 +500,36 @@ def test_extension_integration():
         "backend_status": "operational",
         "timestamp": __import__("datetime").datetime.utcnow().isoformat() + "Z"
     }
+
+# ==============================
+# Development helper endpoints
+# ==============================
+class SimulateBlockPayload(BaseModel):
+    site: str = "example.com"
+
+@app.post("/api/dev/simulate-block")
+def simulate_block(payload: SimulateBlockPayload):
+    """Simulate a blocking tab decision so the extension can be tested."""
+    global LAST_TAB_RESULT
+    site_name = payload.site or "example.com"
+    LAST_TAB_RESULT = {
+        "success": True,
+        "analysis_type": "browser_tab",
+        "result": {
+            "is_distraction": True,
+            "should_warn": False,
+            "should_block": True,
+            "should_close": False,
+            "warning_message": f"Blocking simulated for {site_name}",
+            "block_message": f"This site ({site_name}) is distracting you from your goals.",
+            "site_name": site_name,
+            "warning_level": "medium",
+            "recommended_action": "show_overlay"
+        },
+        "timestamp": __import__("datetime").datetime.utcnow().isoformat() + "Z"
+    }
+    logger.info(f"🧪 Simulated block set for {site_name}")
+    return {"success": True, "message": "Simulated block stored", "result": LAST_TAB_RESULT}
 
 # ==============================
 # Main application runner

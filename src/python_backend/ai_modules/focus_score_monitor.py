@@ -760,19 +760,7 @@ def analyze_focus_from_b64(frame_b64: str) -> Dict[str, Any]:
         # Analyze frame
         result = analyze_focus_from_b64.monitor.analyze_frame(frame)
         
-        # Generate small annotated overlay for debugging in UI
-        try:
-            overlay = analyze_focus_from_b64.monitor.draw_analysis_overlay(frame, result)
-            h, w = overlay.shape[:2]
-            target_w = 320
-            scale = target_w / max(1, w)
-            new_w, new_h = target_w, max(1, int(h * scale))
-            overlay_small = cv2.resize(overlay, (new_w, new_h))
-            ok, buf = cv2.imencode('.jpg', overlay_small, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
-            overlay_b64 = base64.b64encode(buf.tobytes()).decode('utf-8') if ok else None
-        except Exception as e:
-            print(f"⚠️ Overlay encode failed: {e}")
-            overlay_b64 = None
+        # Overlay removed for production response
         
         # Format for API compatibility
         api_result = {
@@ -798,8 +786,7 @@ def analyze_focus_from_b64(frame_b64: str) -> Dict[str, Any]:
             "analysis_timestamp": result.get("timestamp"),
             
             # Full analysis for advanced usage
-            "detailed_analysis": result,
-            "overlay_b64": overlay_b64
+            "detailed_analysis": result
         }
         
         # Sanitize to JSON-safe types (convert numpy types/ndarrays/tuples)

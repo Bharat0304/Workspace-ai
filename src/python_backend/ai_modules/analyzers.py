@@ -205,8 +205,9 @@ def detect_high_distraction_content(text: str) -> tuple[bool, list[str], int]:
         'entertainment', 'gossip', 'drama', 'scandal', 'cringe',
         
         # Music and Party Content
-        'music video', 'song', 'dance', 'party', 'club', 'concert',
-        'remix', 'beat', 'lyrics', 'album',
+        'music video', 'official music video', 'official video', 'lyric video', 'audio',
+        'song', 'track', 'single', 'album', 'playlist', 'vevo', 'mv',
+        'dance', 'party', 'club', 'concert', 'remix', 'beat', 'lyrics',
         
         # Ranking and List Content (often entertainment)
         'top 10', 'top 5', 'best of', 'worst of', 'vs', 'versus',
@@ -249,7 +250,14 @@ def detect_high_distraction_content(text: str) -> tuple[bool, list[str], int]:
         r"(prank|pranking) .+ (people|friends|family)",
         r"(roasting|roast) .+ (people|celebrities|youtubers)",
         r"(gone wrong|gone wild|gone sexual)",
-        r"(you won't believe|shocking|unbelievable)"
+        r"(you won't believe|shocking|unbelievable)",
+        # Music-specific
+        r"(official\s+(music\s+)?video)",
+        r"official\s*#\s*video",
+        r"(lyric\s+video)",
+        r"(audio\s+only|official\s+audio)",
+        r"\bvevo\b",
+        r"\bmv\b"
     ]
     
     import re
@@ -495,6 +503,8 @@ def analyze_focus_from_b64(frame_b64: str) -> Dict[str, Any]:
         
         # Analyze frame with OpenCV Focus Monitor
         analysis_result = monitor.analyze_frame(frame)
+
+        # Debug overlay removed
         
         print(f"📊 Focus analysis complete:")
         print(f"   Focus Score: {analysis_result.get('focus_score', 0):.1f}%")
@@ -544,7 +554,30 @@ def analyze_focus_from_b64(frame_b64: str) -> Dict[str, Any]:
             "detailed_analysis": analysis_result
         }
         
-        return formatted_result
+        # No overlay in production response
+
+        # Sanitize to JSON-safe types to avoid FastAPI encoder issues (numpy.bool_, np.int32, tuples, ndarrays)
+        def _json_safe(obj):
+            try:
+                import numpy as _np
+            except Exception:
+                _np = None
+            if _np is not None:
+                if isinstance(obj, _np.bool_):
+                    return bool(obj)
+                if isinstance(obj, (_np.integer,)):
+                    return int(obj)
+                if isinstance(obj, (_np.floating,)):
+                    return float(obj)
+                if isinstance(obj, _np.ndarray):
+                    return obj.tolist()
+            if isinstance(obj, dict):
+                return {str(k): _json_safe(v) for k, v in obj.items()}
+            if isinstance(obj, (list, tuple, set)):
+                return [_json_safe(v) for v in obj]
+            return obj
+
+        return _json_safe(formatted_result)
         
     except Exception as e:
         print(f"❌ Focus analysis error: {e}")
@@ -612,7 +645,45 @@ def analyze_distraction_from_window(window_info: Dict[str, Any]) -> Dict[str, An
         }
     
     # SECOND: Check for HIGH DISTRACTION entertainment content (STRICT)
+    # Special hard rule for YouTube Music domain
+    if "music.youtube.com" in url:
+        high_keywords = ["youtube music"]
+        high_score = 8
+        print(f"🚨 HIGH DISTRACTION DETECTED: {high_keywords}")
+        print(f"⚡ IMMEDIATE BLOCKING TRIGGERED - Score: {high_score}")
+        return {
+            "is_distraction": True,
+            "distraction_score": min(95, 80 + high_score),
+            "suggested_action": "force-close",
+            "analysis_timestamp": __import__("datetime").datetime.utcnow().isoformat() + "Z",
+            "detected_indicators": high_keywords,
+            "content_type": "high_distraction",
+            "severity": "critical",
+            "active_time_seconds": active_time,
+            "should_alert": True,
+            "should_block": True,
+            "should_warn": False,
+            "should_close": True,
+            "override_reason": "music_streaming_detected",
+            "recommendation": "Music streaming blocked. Return to study content.",
+            "blocking_reason": "YouTube Music domain detected",
+            "warning_message": "🚫 Music Streaming Blocked"
+        }
     is_high_distraction, high_keywords, high_score = detect_high_distraction_content(all_text)
+
+    # Treat YouTube auto-mixes/playlists (RD*, RDCLAK*, OLAK*) as high distraction music playlists
+    if "youtube.com" in url and "list=" in url:
+        import urllib.parse as _parse
+        try:
+            parsed = _parse.urlparse(url)
+            qs = _parse.parse_qs(parsed.query)
+            lst = (qs.get('list', [""])[0] or "").lower()
+        except Exception:
+            lst = ""
+        if lst.startswith("rd") or lst.startswith("rdclak") or lst.startswith("olak"):
+            is_high_distraction = True
+            high_keywords = ["youtube mix/playlist"]
+            high_score = max(high_score, 7)
     
     # AGGRESSIVE: If ANY high distraction keywords found, IMMEDIATELY BLOCK
     if is_high_distraction:
